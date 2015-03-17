@@ -70,35 +70,19 @@ def index(document_directory, dictionary_file, postings_file):
     # open files for writing   
     dict_file = codecs.open(dictionary_file, 'w', encoding='utf-8')
     post_file = open(postings_file, 'wb')
-    vect_file = open("vector_squares_sum", "w")
-
-    byte_offset = 0 # byte offset for pointers to postings file
-
-    # write list of docIDs indexed to first line of dictionary
-    dict_file.write('Indexed from docIDs:')
-    for i in range(docs_indexed):
-        dict_file.write(str(docID_list[i]) + ',')
-    dict_file.write('\n')
-
-    # build dictionary file and postings file
-    vector_squares_sum = {}  # (accumulator) Key: docID, Value: sum of squared weighted components
+  
+    # write dictionary file and postings file
+    vector_squares_sum = collections.defaultdict(lambda: 0)     # (accumulator) Key: docID, Value: sum of squared weighted components
+    byte_offset = 0         # byte offset for pointers to postings file
     for term, docs in dictionary.items():
-        # construct term frequencies map
-        doc_tf = collections.OrderedDict()  # key: docID, Value: occurences of current term in docID
-        for docID in docs:
-            if docID not in doc_tf:
-                doc_tf[docID] = 1
-            else:
-                doc_tf[docID] += 1
+        doc_tf = collections.Counter(docs)  # key: docID, Value: occurences of current term in docID
         df = len(doc_tf)                    # document frequency (number of unique docIDs)
         
         # for each (docID, tf) pair indexed
-        for docID, tf in doc_tf.items():
+        for docID, tf in sorted(doc_tf.items()):
+            w_td = 1 + math.log(tf, 10) # tf as weighted vector component
             # accumulate squared weighted components for docID
-            if (docID not in vector_squares_sum):
-                vector_squares_sum[docID] = (1 + math.log(tf, 10)) ** 2
-            else:
-                vector_squares_sum[docID] += (1 + math.log(tf, 10)) ** 2
+            vector_squares_sum[docID] += w_td ** 2
             # write posting, tf pair into postings file
             posting = struct.pack('II', docID, tf)
             post_file.write(posting)
@@ -106,13 +90,19 @@ def index(document_directory, dictionary_file, postings_file):
         dict_file.write(term + " " + str(df) + " " + str(byte_offset) + "\n")
         byte_offset += 2 * BYTE_SIZE * df   # 2 Integers for each implicit (docID, tf) pair
 
-    # writes vector_squares_sum to disk
-    pickle.dump(vector_squares_sum, vect_file)
-    
+    # writes metadata which contains docIDs indexed and also their respective vector lengths before taking sqrt
+    meta_info = "metadata:"
+    meta_list = sorted(vector_squares_sum.items())
+    for i in range(len(meta_list)):
+        info = meta_list[i]
+        meta_info += str(info[0]) + ":" + str(info[1])    # <docID>:<vector squares sum>
+        if (i != len(meta_list) - 1):
+            meta_info += ","
+    dict_file.write(meta_info)
+
     # close files
     dict_file.close()
     post_file.close()
-    vect_file.close()
 
 """
 This function is modified from: http://stackoverflow.com/questions/354038/how-do-i-check-if-a-string-is-a-number-in-python

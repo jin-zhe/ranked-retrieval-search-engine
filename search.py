@@ -5,7 +5,6 @@ import getopt
 import codecs
 import struct
 import timeit
-import pickle
 import math
 import nltk
 import sys
@@ -32,23 +31,18 @@ def search(dictionary_file, postings_file, queries_file, output_file):
     post_file = io.open(postings_file, 'rb')
     query_file = codecs.open(queries_file, encoding='utf-8')
     out_file = open(output_file, 'w')
-    vect_file = open("vector_squares_sum")
 
     # load dictionary to memory
     loaded_dict = load_dictionary(dict_file)
-    dictionary = loaded_dict[0]     # dictionary map
-    indexed_docIDs = loaded_dict[1] # list of all docIDs indexed in sorted order
+    dictionary = loaded_dict[0]         # dictionary map
+    vector_squares_sum = loaded_dict[1] # Key: docID, Value: sum of squared weighted components
     dict_file.close()
-
-    # load vector_squares_sum to memory
-    vector_squares_sum = pickle.load(vect_file)
-    vect_file.close()
 
     # process each query
     queries_list = query_file.read().splitlines()
     for i in range(len(queries_list)):
         query = queries_list[i]
-        result = get_top_cosine_scores(query, dictionary, post_file, vector_squares_sum, indexed_docIDs)
+        result = get_top_cosine_scores(query, dictionary, post_file, vector_squares_sum)
         # write each result to output
         for j in range(len(result)):
             docID = str(result[j][0])
@@ -69,27 +63,27 @@ params:
     dict_file: opened dictionary file
 """
 def load_dictionary(dict_file):
-    dictionary = {}                 # dictionary map loaded
-    indexed_docIDs = []             # list of all docIDs indexed
-    docIDs_processed = False        # if indexed_docIDs is processed
+    dictionary = {}             # dictionary map loaded
+    vector_squares_sum = {}     # Key: docID, Value: sum of squared weighted components
 
     # load each term along with its df and postings file pointer to dictionary
     for entry in dict_file.read().split('\n'):
-        # if entry is not empty (last line in dictionary file is empty)
-        if (entry):
-            # if first line of dictionary, process list of docIDs indexed
-            if (not docIDs_processed):
-                indexed_docIDs = [int(docID) for docID in entry[20:-1].split(',')]
-                docIDs_processed = True
-            # else if dictionary terms and their attributes
-            else:
-                token = entry.split(" ")
-                term = token[0]
-                df = int(token[1])
-                offset = int(token[2])
-                dictionary[term] = (df, offset)
-
-    return (dictionary, indexed_docIDs)
+        tokens = entry.split(" ")
+        # process dictionary entires
+        if (len(tokens) == 3):
+            term = tokens[0]
+            df = int(tokens[1])
+            offset = int(tokens[2])
+            dictionary[term] = (df, offset)
+        # process metadata
+        else:
+            line = tokens[0]
+            for pair in line[9:-1].split(','):
+                pair = pair.split(":")
+                docID = int(pair[0])
+                sum_squares = float(pair[1])
+                vector_squares_sum[docID] = sum_squares
+    return (dictionary, vector_squares_sum)
 
 """
 returns the TOP_LIMIT most relevant docIDs in the result for the given query
@@ -98,9 +92,9 @@ params:
     dictionary:     the dictionary in memory
     indexed_docIDs: the list of all docIDs indexed
 """
-def get_top_cosine_scores(query, dictionary, post_file, vector_squares_sum, indexed_docIDs):
-    scores = {} # (accumulator) Key: docID, Value: raw tabulated score (before cosine normalization)
-    N = len(indexed_docIDs) # number of documents in collection
+def get_top_cosine_scores(query, dictionary, post_file, vector_squares_sum):
+    scores = collections.defaultdict(lambda: 0) # (accumulator) Key: docID, Value: raw tabulated score (before cosine normalization)
+    N = len(vector_squares_sum) # number of documents in collection
 
     # for each query term
     for term, tf_raw_query in get_query_terms(query):
@@ -114,11 +108,7 @@ def get_top_cosine_scores(query, dictionary, post_file, vector_squares_sum, inde
         for docID, tf_raw_document in load_posting_list(post_file, df, dictionary[term][1]):
             tf_wt_doc = 1 + math.log(tf_raw_document, 10)
             w_td = tf_wt_doc        # weight for term in current document
-            # accumulate scores
-            if (docID not in scores):
-                scores[docID] = (w_tq * w_td)
-            else:
-                scores[docID] += (w_tq * w_td)
+            scores[docID] += (w_tq * w_td) # accumulate scores
 
     # length normalize all scores
     for docID, score in scores.items():
